@@ -23,10 +23,11 @@ func main() {
 	client := http.Client{}
 	url := fmt.Sprintf("https://api.apify.com/v2/key-value-stores/%v/records/OUTPUT?token=%v", default_kvs, token)
 	req, _ := http.NewRequest(http.MethodPut, url, resp.Body)
-	resp, err = client.Do(req)
+	req.Header.Set("Content-Type", "text/html; charset=utf-8")
+	_, err = client.Do(req)
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
-	log.Println(resp.StatusCode)
+	fmt.Println("Saved fetched html to OUTPUT in key-value store.")
 }
