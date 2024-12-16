@@ -1,33 +1,90 @@
 package main
 
 import (
-	"fmt"
-	"log"
-	"net/http"
+	"apify/actor/example/store"
+	"log/slog"
 	"os"
+	"strings"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/geziyor/geziyor"
+	"github.com/geziyor/geziyor/client"
+	"github.com/geziyor/geziyor/export"
 )
 
-func main() {
-	log.Println("Example actor written in Go.")
-	resp, err := http.Get("https://example.com")
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
+var (
+	xlog = slog.New(slog.NewTextHandler(os.Stdout, nil))
+)
 
-	default_kvs, token := os.Getenv("APIFY_DEFAULT_KEY_VALUE_STORE_ID"), os.Getenv("APIFY_TOKEN")
-	if default_kvs == "" || token == "" {
-		log.Fatal("Missing required env vars")
-		return
+type (
+	KVStoreExporter map[string]any
+	AutherNText     struct {
+		Author string `json:"author"`
+		Text   string `json:"text"`
 	}
-	client := http.Client{}
-	url := fmt.Sprintf("https://api.apify.com/v2/key-value-stores/%v/records/OUTPUT?token=%v", default_kvs, token)
-	req, _ := http.NewRequest(http.MethodPut, url, resp.Body)
-	req.Header.Set("Content-Type", "text/html; charset=utf-8")
-	_, err = client.Do(req)
+)
+
+func (kv *KVStoreExporter) Export(parsedData chan any) error {
+	if len(*kv) == 0 {
+		*kv = make(KVStoreExporter)
+	}
+	data := []AutherNText{}
+	for d := range parsedData {
+		e := d.(map[string]interface{})
+		data = append(data, AutherNText{Author: e["author"].(string), Text: e["text"].(string)})
+	}
+	(*kv)["data"] = data
+
+	return nil
+}
+
+func main() {
+	// Get Token and defualt KV store id
+	xlog.Info("Example actor written in Go.")
+
+	// Get default KV store
+	kv := store.KVStoreDefault()
+
+	// Get input
+	input, err := kv.Get("INPUT")
 	if err != nil {
-		log.Fatal(err)
+		xlog.Error("failed to get input from kv store", "error", err)
 		return
 	}
-	fmt.Println("Saved fetched html to OUTPUT in key-value store.")
+	xlog.Info("input from kv store", "input", input)
+	url := input["url"].(string)
+	if strings.EqualFold(url, "") {
+		xlog.Error("no url in input", "url", url)
+	}
+	// Scrape data
+	kvExporter := KVStoreExporter{}
+	scrape([]string{url}, &kvExporter)
+
+	xlog.Info("saving scrapped data to kv store", "data", kvExporter)
+	if err := kv.Put("data", kvExporter); err != nil {
+		xlog.Error("error while add value to store", "data", kvExporter, "error", err)
+	}
+	xlog.Info("actor is done")
+}
+
+func scrape(urls []string, exporter export.Exporter) {
+	g := geziyor.NewGeziyor(&geziyor.Options{
+		StartURLs: urls,
+		ParseFunc: quotesParse,
+		Exporters: []export.Exporter{&export.JSON{}, exporter},
+	})
+	g.Start()
+	slog.Info("exportor content", "data", exporter)
+}
+
+func quotesParse(g *geziyor.Geziyor, r *client.Response) {
+	r.HTMLDoc.Find("div.quote").Each(func(i int, s *goquery.Selection) {
+		g.Exports <- map[string]interface{}{
+			"text":   s.Find("span.text").Text(),
+			"author": s.Find("small.author").Text(),
+		}
+	})
+	if href, ok := r.HTMLDoc.Find("li.next > a").Attr("href"); ok {
+		g.Get(r.JoinURL(href), quotesParse)
+	}
 }

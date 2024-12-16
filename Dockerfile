@@ -1,9 +1,9 @@
-FROM golang:1.17.1-alpine
+FROM golang:latest
 
 WORKDIR /app
 COPY . .
 
 RUN go mod download
 
-RUN go build -o /example-actor
-CMD ["/example-actor"]
+RUN go build -o /goactor
+CMD ["/goactor"]
