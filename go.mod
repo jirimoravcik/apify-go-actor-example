@@ -4,7 +4,7 @@ go 1.23
 
 require (
 	github.com/PuerkitoBio/goquery v1.9.2
-	github.com/davesavic/clink v1.0.2
+	github.com/apify/apify-client-go v0.4.1
 	github.com/geziyor/geziyor v0.0.0-20240812061556-229b8ca83ac1
 )
 

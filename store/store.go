@@ -1,21 +1,18 @@
 package store
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"strings"
 
-	"github.com/davesavic/clink"
+	apify "github.com/apify/apify-client-go"
 )
 
 var (
 	KVStoreDefaultID string
-	KVStoreURL       = "https://api.apify.com/v2/key-value-stores/%s/records/%s?token=%s"
 	Token            string
 	xlog             = slog.New(slog.NewTextHandler(os.Stdout, nil))
 )
@@ -24,7 +21,7 @@ type (
 	KVStoreValue map[string]any
 	KVStore      struct {
 		ID     string
-		Client *clink.Client
+		Client *apify.KeyValueStoreClient
 	}
 )
 
@@ -36,14 +33,9 @@ func init() {
 	}
 }
 
-func GetKVStoreEndpoint(id string, key string) string {
-	return fmt.Sprintf(KVStoreURL, id, key, Token)
-}
-
 func KVStoreNew(id string) KVStore {
-	client := clink.NewClient()
-	client.Headers["Content-Type"] = "application/json"
-	return KVStore{ID: id, Client: client}
+	client := apify.NewClient(Token)
+	return KVStore{ID: id, Client: client.KeyValueStore(id)}
 }
 
 func KVStoreDefault() KVStore {
@@ -51,42 +43,34 @@ func KVStoreDefault() KVStore {
 }
 
 func (kv KVStore) Get(key string) (KVStoreValue, error) {
-	url := GetKVStoreEndpoint(kv.ID, key)
-	resp, err := kv.Client.Get(url)
+	record, ok, err := kv.Client.GetRecord(context.Background(), key)
 	if err != nil {
 		xlog.Error("failed to get value", "key", key, "error", err)
 		return nil, err
 	}
-	return KVStoreValueFromResponse(resp), nil
+	if !ok {
+		return nil, fmt.Errorf("record %q not found in key-value store", key)
+	}
+	var value KVStoreValue
+	if err := json.Unmarshal(record.Value, &value); err != nil {
+		xlog.Error("failed to unmarshal record", "key", key, "error", err)
+		return nil, err
+	}
+	return value, nil
 }
 
 func (kv KVStore) Put(key string, payload any) error {
-	url := GetKVStoreEndpoint(kv.ID, key)
-	_, err := kv.Client.Put(url, KVStoreRequestFrom(payload))
-	if err != nil {
+	if err := kv.Client.SetRecordJSON(context.Background(), key, payload); err != nil {
 		xlog.Error("failed to set value", "key", key, "error", err)
+		return err
 	}
-	return err
+	return nil
 }
 
 func (kv KVStore) Delete(key string) error {
-	url := GetKVStoreEndpoint(kv.ID, key)
-	_, err := kv.Client.Delete(url)
-	if err != nil {
+	if err := kv.Client.DeleteRecord(context.Background(), key); err != nil {
 		xlog.Error("failed to delete key", "key", key, "error", err)
+		return err
 	}
-	return err
-}
-
-func KVStoreRequestFrom(v any) io.Reader {
-	b, _ := json.Marshal(v)
-	return bytes.NewReader(b)
-}
-
-func KVStoreValueFromResponse(resp *http.Response) KVStoreValue {
-	var value KVStoreValue
-	if err := clink.ResponseToJson(resp, &value); err != nil {
-		xlog.Error("failed to unmarshal response", "error", err)
-	}
-	return value
+	return nil
 }
